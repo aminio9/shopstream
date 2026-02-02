@@ -1,0 +1,96 @@
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+env.bak/
+venv.bak/
+.pytest_cache/
+.coverage
+.htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+*.crt
+
+# Docker artifacts
+.dockerignore.backup
+*/Dockerfile.*
+*/docker-compose*.yml
+
+# Build artifacts & caches
+*/dist/
+*/build/
+*/out/
+*/target/
+
+# Log files
+*.log
+logs/
+*.log.*
+
+# Backup files from maintenance scripts
+backups/
+*.backup
+*.bak
+*.tar.gz
+*.tar
+*.sql.gz
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
+Thumbs.db
+
+# OS artifacts
+*.orig
+*.rej
+
+# Volume data (should never be committed)
+volumes/
+data/
+*/data/
+
+# Grafana/Prometheus/Loki runtime data
+grafana-data/
+prometheus-data/
+loki-data/
+
+# Nginx cache
+*/nginx-cache/
+
+# Coverage reports
+coverage/
+*.lcov
+*.clover
+
+# Lock files (optional - many teams commit these)
+# package-lock.json
+# yarn.lock
+# Pipfile.lock
+# hidden folder
+.swarm/
+.secrets/

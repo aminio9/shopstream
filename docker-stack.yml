@@ -1,0 +1,224 @@
+services:
+  #Data Layer 
+  mariadb:
+    image: mariadb:11.8
+    networks:
+      - data
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    secrets:
+      - db_password
+      - db_root_password
+    configs:
+      - source: mariadb-init-sql
+        target: /docker-entrypoint-initdb.d/init.sql  
+        uid: '999'   
+        gid: '999'  
+        mode: 0444 
+    environment:
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+      MARIADB_PASSWORD_FILE: /run/secrets/db_password
+      MARIADB_DATABASE: shopstream
+      MARIADB_USER: shopstream
+      MARIADB_AUTO_UPGRADE: "1"
+    deploy:
+      placement:
+        constraints:
+          - node.labels.db == true
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "sh", "-c", "pidof mariadbd || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  redis:
+    image: docker.arvancloud.ir/redis:8.4-alpine
+    networks:
+      - data
+    volumes:
+      - redis-data:/data
+    secrets:
+      - redis_password
+    command: >
+      sh -c 'exec redis-server
+        --appendonly yes
+        --requirepass "$$(cat /run/secrets/redis_password)"'
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 10
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" ping | grep -q PONG"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  rabbitmq:
+    image: docker.arvancloud.ir/rabbitmq:4.2-management
+    networks:
+      - data
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq/mnesia
+    secrets:
+      - rabbitmq_password
+    environment:
+      RABBITMQ_DEFAULT_USER: shopstream
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        # Read password from Docker secret
+        export RABBITMQ_DEFAULT_PASS="$$(cat /run/secrets/rabbitmq_password)"
+        # Start RabbitMQ using official entrypoint
+        exec docker-entrypoint.sh rabbitmq-server
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 90s
+
+  minio:
+    image: docker.arvancloud.ir/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    networks:
+      - data
+    volumes:
+      - minio-data:/data
+    secrets:
+      - minio_access_key
+      - minio_secret_key
+    environment:
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_access_key
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_secret_key
+      MINIO_BROWSER: "on"
+    command: server /data --console-address ":9001"
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  elasticsearch:
+    image: docker.arvancloud.ir/elasticsearch:9.2.4
+    networks:
+      - data
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - bootstrap.memory_lock=true
+      - cluster.name=docker-cluster
+      - node.name=es01
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  #app
+networks:
+  data:
+    external: true
+
+volumes:
+  mariadb-data:
+  redis-data:
+  rabbitmq-data:
+  minio-data:
+  elasticsearch-data:
+
+secrets:
+  db_root_password:
+    external: true
+  db_password:
+    external: true
+  redis_password:
+    external: true
+  rabbitmq_password:
+    external: true
+  minio_access_key:
+    external: true
+  minio_secret_key:
+    external: true
+
+configs:
+  mariadb-init-sql:          
+    file: ./config/mariadb/init.sql
