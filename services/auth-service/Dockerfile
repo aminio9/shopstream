@@ -15,7 +15,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -i https://mirror.chabokan.net/repository/pypi-proxy/simple --no-cache-dir -r requirements.txt
 
 COPY --chown=appuser:appgroup src/app.py .
 
