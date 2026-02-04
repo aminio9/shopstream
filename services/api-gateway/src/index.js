@@ -16,6 +16,9 @@ const Redis = require("ioredis");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+// Behind Traefik / reverse proxy
+app.set("trust proxy", 1); // or true
+
 
 // ============================================
 // Configuration
@@ -81,6 +84,46 @@ app.use(
 // Body parsing
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
+
+const authProxy = createProxyMiddleware({
+  target: config.services.auth,
+  changeOrigin: true,
+  pathRewrite: { "^/auth": "" },
+
+  proxyTimeout: 20000,
+  timeout: 20000,
+
+  // IMPORTANT: forward the body (express.json() already consumed it)
+  onProxyReq(proxyReq, req, res) {
+    console.log("→ Proxying to AUTH:", req.method, req.originalUrl);
+
+    if (req.body && Object.keys(req.body).length) {
+      const bodyData = JSON.stringify(req.body);
+
+      proxyReq.setHeader("Content-Type", "application/json");
+      proxyReq.setHeader("Content-Length", Buffer.byteLength(bodyData));
+
+      proxyReq.write(bodyData);
+    } else {
+      console.log("⚠️ AUTH body empty in gateway:", {
+        contentType: req.headers["content-type"],
+        contentLength: req.headers["content-length"],
+      });
+    }
+  },
+
+  onProxyRes(proxyRes, req) {
+    console.log("← AUTH responded:", proxyRes.statusCode, req.method, req.originalUrl);
+  },
+
+  onError(err, req, res) {
+    console.error("AUTH PROXY ERROR:", err.code, err.message);
+    if (!res.headersSent) {
+      res.status(502).json({ error: "bad_gateway", code: err.code, detail: err.message });
+    }
+  },
+});
+
 
 // ============================================
 // Rate Limiting
@@ -253,20 +296,12 @@ app.use("/auth", authLimiter);
 // Proxy to auth service
 app.post(
   "/auth/register",
-  createProxyMiddleware({
-    target: config.services.auth,
-    changeOrigin: true,
-    pathRewrite: { "^/auth": "" },
-  })
+  authProxy
 );
 
 app.post(
   "/auth/login",
-  createProxyMiddleware({
-    target: config.services.auth,
-    changeOrigin: true,
-    pathRewrite: { "^/auth": "" },
-  })
+  authProxy
 );
 
 app.get("/auth/me", authenticateToken, (req, res) => {

@@ -118,7 +118,7 @@ services:
 
 
   api-gateway:
-    image: api-gateway:1.0
+    image: api-gateway:1.0.1
 
     networks:
       - traefik-public
@@ -200,7 +200,7 @@ services:
 
 
   auth-service:
-    image: auth-service:1.0.0
+    image: auth-service:1.0.1
 
     networks:
       - backend

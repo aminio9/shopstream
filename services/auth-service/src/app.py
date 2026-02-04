@@ -20,6 +20,8 @@ from mysql.connector import pooling
 app = Flask(__name__)
 CORS(app)
 
+
+
 # ============================================
 # Configuration
 # ============================================
@@ -390,6 +392,8 @@ def login():
     except Exception as e:
         print(f"Login error: {e}")
         return jsonify({"error": "Login failed"}), 500
+
+
 
 
 @app.route("/refresh", methods=["POST"])
