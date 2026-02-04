@@ -17,9 +17,24 @@ import pika
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from mysql.connector import pooling
+from decimal import Decimal, InvalidOperation
 
 app = Flask(__name__)
 CORS(app)
+
+
+
+def as_decimal(x, field):
+    try:
+        return Decimal(str(x))
+    except (InvalidOperation, TypeError):
+        raise ValueError(f"Invalid {field}: {x}")
+
+def as_int(x, field):
+    try:
+        return int(x)
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid {field}: {x}")
 
 # ============================================
 # Configuration
@@ -373,108 +388,127 @@ def get_order(order_id):
         return jsonify({"error": "Failed to fetch order"}), 500
 
 
+
 @app.route("/orders", methods=["POST"])
 def create_order():
-    """Create a new order."""
     user_id = get_user_id()
-
     if not user_id:
         return jsonify({"error": "User ID required"}), 400
 
-    data = request.get_json()
+    # Header user id -> int (DB column is INT)
+    try:
+        user_id_int = as_int(user_id, "X-User-Id")
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
 
-    if not data or "items" not in data or not data["items"]:
+    data = request.get_json(silent=True) or {}
+    items = data.get("items")
+
+    if not isinstance(items, list) or not items:
         return jsonify({"error": "Order items are required"}), 400
 
     try:
-        conn = get_db()
-        cursor = conn.cursor()
+        # Normalize + validate items so we never do int + str math
+        norm_items = []
+        for i, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ValueError(f"items[{i}] must be an object")
 
-        # Calculate totals
-        subtotal = sum(item["price"] * item["quantity"] for item in data["items"])
-        shipping = 0 if subtotal > 50 else 9.99
+            # validate required fields
+            if item.get("productId") is None:
+                raise ValueError(f"Missing items[{i}].productId")
+            if not item.get("name"):
+                raise ValueError(f"Missing items[{i}].name")
+
+            price = as_decimal(item.get("price"), f"items[{i}].price")   # Decimal
+            qty = as_int(item.get("quantity"), f"items[{i}].quantity")   # int
+
+            if qty <= 0:
+                raise ValueError(f"items[{i}].quantity must be > 0")
+            if price < 0:
+                raise ValueError(f"items[{i}].price must be >= 0")
+
+            norm_items.append({
+                "productId": as_int(item.get("productId"), f"items[{i}].productId"),
+                "name": str(item.get("name")),
+                "price": price,
+                "quantity": qty,
+            })
+
+        # Totals (force Decimal start to avoid sum() starting at int 0)
+        subtotal = sum((it["price"] * it["quantity"] for it in norm_items), start=Decimal("0"))
+        shipping = Decimal("0") if subtotal > Decimal("50") else Decimal("9.99")
         total = subtotal + shipping
 
-        # Create order
-        cursor.execute(
-            """INSERT INTO orders (user_id, subtotal, shipping, total, shipping_address, notes)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
-            (
-                user_id,
-                subtotal,
-                shipping,
-                total,
-                data.get("shippingAddress"),
-                data.get("notes"),
-            ),
-        )
-
-        order_id = cursor.lastrowid
-
-        # Add order items
-        for item in data["items"]:
+        conn = get_db()
+        cursor = conn.cursor()
+        try:
             cursor.execute(
-                """INSERT INTO order_items (order_id, product_id, product_name, price, quantity)
-                   VALUES (%s, %s, %s, %s, %s)""",
+                """INSERT INTO orders (user_id, subtotal, shipping, total, shipping_address, notes)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
                 (
-                    order_id,
-                    item["productId"],
-                    item["name"],
-                    item["price"],
-                    item["quantity"],
+                    user_id_int,
+                    subtotal,
+                    shipping,
+                    total,
+                    data.get("shippingAddress"),
+                    data.get("notes"),
                 ),
             )
+            order_id = cursor.lastrowid
 
-        conn.commit()
-        cursor.close()
-        conn.close()
+            for it in norm_items:
+                cursor.execute(
+                    """INSERT INTO order_items (order_id, product_id, product_name, price, quantity)
+                       VALUES (%s, %s, %s, %s, %s)""",
+                    (order_id, it["productId"], it["name"], it["price"], it["quantity"]),
+                )
 
-        # Add to order history
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
+
         add_order_history(order_id, "pending", "Order created")
 
-        # Publish to RabbitMQ for async processing
+        # Publish normalized items (no string prices sneaking through)
         publish_message(
             "order_processing",
             {
                 "orderId": order_id,
-                "userId": user_id,
-                "items": data["items"],
-                "total": total,
+                "userId": user_id_int,
+                "items": [
+                    {
+                        "productId": it["productId"],
+                        "name": it["name"],
+                        "price": str(it["price"]),   # serialize Decimal safely
+                        "quantity": it["quantity"],
+                    }
+                    for it in norm_items
+                ],
+                "subtotal": str(subtotal),
+                "shipping": str(shipping),
+                "total": str(total),
             },
         )
-
-        # Publish notification
-        publish_message(
-            "order_notifications",
-            {
-                "type": "order_created",
-                "userId": user_id,
-                "orderId": order_id,
-                "total": total,
-            },
-        )
-
-        # Update inventory
-        for item in data["items"]:
-            publish_message(
-                "inventory_updates",
-                {
-                    "productId": item["productId"],
-                    "quantity": -item["quantity"],
-                    "orderId": order_id,
-                },
-            )
 
         return jsonify(
             {
                 "id": order_id,
                 "orderId": order_id,
                 "status": "pending",
-                "total": total,
+                "subtotal": float(subtotal),
+                "shipping": float(shipping),
+                "total": float(total),
                 "message": "Order created successfully",
             }
         ), 201
 
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
     except Exception as e:
         print(f"Create order error: {e}")
         return jsonify({"error": "Failed to create order"}), 500

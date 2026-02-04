@@ -1,17 +1,18 @@
 -- ============================================
--- ShopStream Database Initialization
--- ============================================
--- Aligns schema with Auth Service code:
--- users.salt, users.role, users.last_login
--- refresh_tokens.token (code expects rt.token)
+-- ShopStream Database Initialization (FIXED)
+-- Matches order-service code:
+--   orders: subtotal, shipping, total
+--   order_items: price
+--   order_history table name
 -- ============================================
 
--- Create database if not exists
-CREATE DATABASE IF NOT EXISTS shopstream CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS shopstream
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
 USE shopstream;
 
 -- ============================================
--- Users Table (Auth Service) - FIXED
+-- Users Table (Auth Service)
 -- ============================================
 CREATE TABLE IF NOT EXISTS users (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -19,11 +20,9 @@ CREATE TABLE IF NOT EXISTS users (
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
 
-    -- Auth expects these:
     password_hash VARCHAR(255) NOT NULL,
     salt VARCHAR(255) NOT NULL,
 
-    -- Auth expects role + updates last_login
     role VARCHAR(50) NOT NULL DEFAULT 'user',
     last_login DATETIME NULL,
 
@@ -37,19 +36,16 @@ CREATE TABLE IF NOT EXISTS users (
     INDEX idx_active (is_active),
     INDEX idx_role (role),
     INDEX idx_last_login (last_login)
-) ENGINE = InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============================================
--- Refresh Tokens Table (Auth Service) - FIXED
+-- Refresh Tokens Table (Auth Service)
 -- ============================================
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
 
-    -- Auth service expects rt.token
     token VARCHAR(255) NOT NULL,
-
-    -- Keep compatibility: token_hash still exists if other services use it
     token_hash VARCHAR(255) NULL,
 
     expires_at DATETIME NOT NULL,
@@ -62,7 +58,7 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     INDEX idx_token_hash (token_hash),
     INDEX idx_user (user_id),
     INDEX idx_expires (expires_at)
-) ENGINE = InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============================================
 -- Categories Table (Product Service)
@@ -77,7 +73,7 @@ CREATE TABLE IF NOT EXISTS categories (
     FOREIGN KEY (parent_id) REFERENCES categories(id) ON DELETE SET NULL,
     INDEX idx_slug (slug),
     INDEX idx_parent (parent_id)
-) ENGINE = InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============================================
 -- Products Table (Product Service)
@@ -87,7 +83,7 @@ CREATE TABLE IF NOT EXISTS products (
     name VARCHAR(255) NOT NULL,
     slug VARCHAR(255) UNIQUE NOT NULL,
     description TEXT,
-    price DECIMAL(10, 2) NOT NULL,
+    price DECIMAL(10,2) NOT NULL,
     stock INT DEFAULT 0,
     category_id INT NULL,
     image_url VARCHAR(500),
@@ -100,67 +96,77 @@ CREATE TABLE IF NOT EXISTS products (
     INDEX idx_active (is_active),
     INDEX idx_price (price),
     FULLTEXT idx_search (name, description)
-) ENGINE = InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============================================
--- Orders Table (Order Service)
+-- Orders Table (Order Service)  
+-- Code inserts: (user_id, subtotal, shipping, total, shipping_address, notes)
 -- ============================================
 CREATE TABLE IF NOT EXISTS orders (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
-    status ENUM('pending', 'processing', 'shipped', 'delivered', 'cancelled') DEFAULT 'pending',
-    total_amount DECIMAL(10, 2) NOT NULL,
+
+    status ENUM('pending', 'processing', 'shipped', 'delivered', 'cancelled')
+      DEFAULT 'pending',
+
+    subtotal DECIMAL(10,2) NOT NULL,
+    shipping DECIMAL(10,2) NOT NULL DEFAULT 0,
+    total    DECIMAL(10,2) NOT NULL,
+
     shipping_address TEXT,
-    payment_method VARCHAR(50),
-    payment_status ENUM('pending', 'paid', 'failed', 'refunded') DEFAULT 'pending',
     notes TEXT,
+
+    -- Optional fields (safe to keep, code ignores them)
+    payment_method VARCHAR(50) NULL,
+    payment_status ENUM('pending','paid','failed','refunded') DEFAULT 'pending',
+
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     INDEX idx_user (user_id),
     INDEX idx_status (status),
     INDEX idx_created (created_at)
-) ENGINE = InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============================================
--- Order Items Table (Order Service)
+-- Order Items Table (Order Service) 
+-- Code inserts: (order_id, product_id, product_name, price, quantity)
 -- ============================================
 CREATE TABLE IF NOT EXISTS order_items (
     id INT AUTO_INCREMENT PRIMARY KEY,
     order_id INT NOT NULL,
     product_id INT NOT NULL,
     product_name VARCHAR(255) NOT NULL,
+    price DECIMAL(10,2) NOT NULL,
     quantity INT NOT NULL,
-    unit_price DECIMAL(10, 2) NOT NULL,
-    total_price DECIMAL(10, 2) NOT NULL,
+
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+
     INDEX idx_order (order_id),
     INDEX idx_product (product_id)
-) ENGINE = InnoDB;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============================================
--- Order Status History (Order Service)
+-- Order History Table (Order Service) 
+-- Code inserts into order_history(order_id, status, message)
 -- ============================================
-CREATE TABLE IF NOT EXISTS order_status_history (
+CREATE TABLE IF NOT EXISTS order_history (
     id INT AUTO_INCREMENT PRIMARY KEY,
     order_id INT NOT NULL,
-    old_status VARCHAR(50),
-    new_status VARCHAR(50) NOT NULL,
-    changed_by INT NULL,
-    notes TEXT,
+    status VARCHAR(50) NOT NULL,
+    message TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
     FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
-    FOREIGN KEY (changed_by) REFERENCES users(id) ON DELETE SET NULL,
-    INDEX idx_order (order_id),
-    INDEX idx_created (created_at)
-) ENGINE = InnoDB;
+    INDEX idx_order (order_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ============================================
 -- Insert Default Data
 -- ============================================
 
--- Default Categories
 INSERT IGNORE INTO categories (id, name, slug, description)
 VALUES
     (1, 'Electronics', 'electronics', 'Electronic devices and gadgets'),
@@ -169,7 +175,6 @@ VALUES
     (4, 'Home & Garden', 'home-garden', 'Home improvement and garden supplies'),
     (5, 'Sports', 'sports', 'Sports equipment and accessories');
 
--- Sample Products
 INSERT IGNORE INTO products (id, name, slug, description, price, stock, category_id, is_active)
 VALUES
     (1, 'Wireless Headphones', 'wireless-headphones', 'High-quality wireless headphones with noise cancellation', 199.99, 100, 1, TRUE),
@@ -181,15 +186,12 @@ VALUES
     (7, 'Yoga Mat', 'yoga-mat', 'Non-slip yoga mat with carrying strap', 34.99, 80, 5, TRUE),
     (8, 'LED Desk Lamp', 'led-desk-lamp', 'Adjustable LED desk lamp with USB charging port', 59.99, 60, 4, TRUE);
 
--- Admin User (password: admin123)
--- IMPORTANT: Your code expects password_hash + salt separately.
--- Replace these placeholders with real generated values from your hash_password().
 INSERT IGNORE INTO users (id, name, email, password_hash, salt, role, is_active, is_admin)
 VALUES
     (1, 'Admin User', 'admin@shopstream.io', 'pbkdf2:sha256:260000$SOME_SALT$SOME_HASH', 'SOME_SALT', 'admin', TRUE, TRUE);
 
 -- ============================================
--- Stored Procedures
+-- Stored Procedures (UPDATED to use orders.total)
 -- ============================================
 DELIMITER //
 
@@ -215,8 +217,8 @@ CREATE PROCEDURE IF NOT EXISTS GetOrderSummary(
 )
 BEGIN
     SELECT COUNT(*) as total_orders,
-           COALESCE(SUM(total_amount), 0) as total_spent,
-           COALESCE(AVG(total_amount), 0) as avg_order_value
+           COALESCE(SUM(total), 0) as total_spent,
+           COALESCE(AVG(total), 0) as avg_order_value
     FROM orders
     WHERE user_id = p_user_id;
 END //
@@ -224,7 +226,7 @@ END //
 DELIMITER ;
 
 -- ============================================
--- Views
+-- Views (UPDATED to use orders.total and order_items.price)
 -- ============================================
 CREATE OR REPLACE VIEW v_order_details AS
 SELECT
@@ -233,7 +235,9 @@ SELECT
     u.name AS customer_name,
     u.email AS customer_email,
     o.status,
-    o.total_amount,
+    o.subtotal,
+    o.shipping,
+    o.total,
     o.payment_status,
     o.created_at,
     COUNT(oi.id) AS item_count
@@ -249,7 +253,7 @@ SELECT
     p.price,
     p.stock,
     COALESCE(SUM(oi.quantity), 0) AS total_sold,
-    COALESCE(SUM(oi.total_price), 0) AS total_revenue
+    COALESCE(SUM(oi.price * oi.quantity), 0) AS total_revenue
 FROM products p
 LEFT JOIN order_items oi ON p.id = oi.product_id
 GROUP BY p.id;

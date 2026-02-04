@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # Edge Layer
   traefik:
@@ -69,7 +67,7 @@ services:
 
   # Application Layer
   frontend:
-    image: frontend:1.0.4
+    image: frontend:1.0.5
 
     networks:
       - traefik-public
@@ -330,7 +328,7 @@ services:
 
 
   order-service:
-    image: order-service:1.0.0
+    image: order-service:1.0.1
 
     networks:
       - backend
