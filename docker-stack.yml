@@ -31,7 +31,7 @@ services:
 
     deploy:
       mode: replicated
-      replicas: 1
+      replicas: 3
 
       placement:
         constraints:
@@ -82,7 +82,7 @@ services:
       start_period: 60s
 
     deploy:
-      replicas: 1
+      replicas: 3
       placement:
         preferences:
           - spread: node.id
@@ -156,7 +156,7 @@ services:
       start_period: 60s
 
     deploy:
-      replicas: 1
+      replicas: 4
 
       placement:
         preferences:
@@ -234,7 +234,7 @@ services:
       start_period: 60s
 
     deploy:
-      replicas: 1
+      replicas: 2
 
       placement:
         preferences:
@@ -300,7 +300,7 @@ services:
       start_period: 60s
 
     deploy:
-      replicas: 1
+      replicas: 3
 
       placement:
         preferences:
@@ -368,7 +368,7 @@ services:
       start_period: 60s
 
     deploy:
-      replicas: 1
+      replicas: 2
 
       placement:
         preferences:
@@ -422,7 +422,7 @@ services:
       start_period: 60s
 
     deploy:
-      replicas: 1
+      replicas: 2
 
       placement:
         preferences:
