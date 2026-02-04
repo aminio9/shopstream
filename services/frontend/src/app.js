@@ -7,6 +7,85 @@ let cart = [];
 let products = [];
 
 // ============================================
+// Safe number & money helpers (prevents toFixed crashes)
+// ============================================
+
+function toNumber(value, fallback = 0) {
+  // Convert strings/objects/null to a number safely
+  if (value && typeof value === "object") {
+    // handle {amount: "12.99"} or {value: 12.99}
+    value = value.amount ?? value.value ?? value.price ?? value.unit_price ?? value.total ?? value;
+  }
+  const n = typeof value === "string" ? Number(value.trim()) : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function money(value) {
+  return toNumber(value, 0); // ALWAYS returns a valid number
+}
+
+function formatMoney(value) {
+  // always safe string like "12.00"
+  return money(value).toFixed(2);
+}
+
+/**
+ * Normalizes cart items coming from:
+ * - localStorage
+ * - /api/cart
+ * Supports various shapes: productId/product_id, quantity/qty, nested product, price objects, etc.
+ */
+function normalizeCartItems(items) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const productId =
+      item.productId ??
+      item.product_id ??
+      item.product?.id ??
+      item.product?.productId;
+
+    const quantity = toNumber(item.quantity ?? item.qty ?? 0, 0);
+
+    let price =
+      item.price ??
+      item.unit_price ??
+      item.product?.price ??
+      item.product?.unit_price;
+
+    // Handle nested price objects: { amount: "12.99" } etc.
+    if (price && typeof price === "object") {
+      price = price.amount ?? price.value ?? price.price ?? 0;
+    }
+
+    price = toNumber(price, NaN); // keep NaN for now; we enrich later
+
+    return {
+      ...item,
+      productId,
+      quantity,
+      price,
+      name: item.name ?? item.product?.name,
+      image: item.image ?? item.product?.image ?? item.product?.image_url,
+    };
+  });
+}
+
+/**
+ * Ensures cart items always have usable name/image/price by filling from products list.
+ * Call after loadProducts and after syncing cart from server.
+ */
+function enrichCartFromProducts() {
+  cart = (Array.isArray(cart) ? cart : []).map((item) => {
+    const p = products.find((x) => x.id === item.productId);
+    return {
+      ...item,
+      name: item.name ?? p?.name ?? "Unknown product",
+      image: item.image ?? p?.image ?? null,
+      price: Number.isFinite(item.price) ? item.price : toNumber(p?.price, 0),
+    };
+  });
+}
+
+// ============================================
 // Initialization
 // ============================================
 
@@ -48,17 +127,17 @@ function updateAuthUI() {
   const authSection = document.getElementById("authSection");
   if (currentUser) {
     authSection.innerHTML = `
-            <div class="dropdown">
-                <button class="btn btn-outline-light dropdown-toggle" data-bs-toggle="dropdown">
-                    <i class="bi bi-person-circle"></i> ${currentUser.name}
-                </button>
-                <ul class="dropdown-menu dropdown-menu-end">
-                    <li><a class="dropdown-item" href="#" onclick="showOrders()">My Orders</a></li>
-                    <li><hr class="dropdown-divider"></li>
-                    <li><a class="dropdown-item" href="#" onclick="logout()">Logout</a></li>
-                </ul>
-            </div>
-        `;
+      <div class="dropdown">
+        <button class="btn btn-outline-light dropdown-toggle" data-bs-toggle="dropdown">
+          <i class="bi bi-person-circle"></i> ${currentUser.name}
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><a class="dropdown-item" href="#" onclick="showOrders()">My Orders</a></li>
+          <li><hr class="dropdown-divider"></li>
+          <li><a class="dropdown-item" href="#" onclick="logout()">Logout</a></li>
+        </ul>
+      </div>
+    `;
   } else {
     authSection.innerHTML = `<button class="btn btn-primary" onclick="showLoginModal()">Login</button>`;
   }
@@ -115,9 +194,7 @@ async function register(event) {
     const data = await response.json();
 
     if (response.ok) {
-      bootstrap.Modal.getInstance(
-        document.getElementById("registerModal")
-      ).hide();
+      bootstrap.Modal.getInstance(document.getElementById("registerModal")).hide();
       showToast("Registration successful! Please login.", "success");
       showLoginModal();
     } else {
@@ -134,6 +211,7 @@ function logout() {
   localStorage.removeItem("token");
   currentUser = null;
   cart = [];
+  saveCart();
   updateAuthUI();
   updateCartUI();
   showProducts();
@@ -143,36 +221,32 @@ function logout() {
 // ============================================
 // Products
 // ============================================
+
 async function loadProducts() {
   showLoading();
   try {
-    
     const response = await fetch(`${API_URL}/products`);
     console.log("Response status:", response.status);
-    
+
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-    
+
     const apiProducts = await response.json();
-    // console.log("Raw API response:", apiProducts);
-    // console.log("Product count:", apiProducts.length);
-    
+
     if (!Array.isArray(apiProducts)) {
       throw new Error("API response is not an array");
     }
-    
+
     // Normalize data
     products = apiProducts
-      .filter(p => p.is_active)
-      .map(p => {
-        // console.log("Processing product:", p.id, p.name);
-        
-        const priceNum = parseFloat(p.price);
-        if (isNaN(priceNum)) {
+      .filter((p) => p.is_active)
+      .map((p) => {
+        const priceNum = toNumber(p.price, 0);
+        if (!Number.isFinite(priceNum)) {
           console.warn(`Invalid price for product ${p.id}:`, p.price);
         }
-        
+
         return {
           id: p.id,
           name: p.name,
@@ -184,13 +258,16 @@ async function loadProducts() {
         };
       });
 
-    // console.log("Normalized products:", products);
-    
     renderProducts(products);
     loadCategories();
-    
+
+    // IMPORTANT: now that products exist, enrich cart (fixes missing/invalid price)
+    cart = normalizeCartItems(cart);
+    enrichCartFromProducts();
+    saveCart();
+    updateCartUI();
   } catch (error) {
-    console.error("Product load error:", error); 
+    console.error("Product load error:", error);
     console.error("Error stack:", error.stack);
     showToast("Failed to load products: " + error.message, "error");
   } finally {
@@ -212,55 +289,52 @@ function getCategoryName(categoryId) {
 function renderProducts(productsToRender) {
   const grid = document.getElementById("productsGrid");
 
-  if (productsToRender.length === 0) {
+  if (!productsToRender || productsToRender.length === 0) {
     grid.innerHTML = `
-            <div class="col-12 text-center py-5">
-                <i class="bi bi-inbox display-1 text-muted"></i>
-                <p class="text-muted mt-3">No products found</p>
-            </div>
-        `;
+      <div class="col-12 text-center py-5">
+        <i class="bi bi-inbox display-1 text-muted"></i>
+        <p class="text-muted mt-3">No products found</p>
+      </div>
+    `;
     return;
   }
 
   grid.innerHTML = productsToRender
     .map(
       (product) => `
-        <div class="col-md-6 col-lg-4 col-xl-3">
-            <div class="card product-card h-100">
-                <img src="${
-                  product.image ||
-                  "https://via.placeholder.com/300x200?text=" +
-                    encodeURIComponent(product.name)
-                }" 
-                     class="card-img-top" alt="${
-                       product.name
-                     }" style="height: 200px; object-fit: cover;">
-                <div class="card-body d-flex flex-column">
-                    <span class="badge bg-secondary mb-2" style="width: fit-content;">${
-                      product.category
-                    }</span>
-                    <h5 class="card-title">${product.name}</h5>
-                    <p class="card-text text-muted small flex-grow-1">${
-                      product.description || ""
-                    }</p>
-                    <div class="d-flex justify-content-between align-items-center mt-auto">
-                        <span class="h5 mb-0 text-primary">$${product.price.toFixed(
-                          2
-                        )}</span>
-                        <button class="btn btn-primary btn-sm" onclick="addToCart(${
-                          product.id
-                        })">
-                            <i class="bi bi-cart-plus"></i> Add
-                        </button>
-                    </div>
-                </div>
-                ${
-                  product.stock < 10
-                    ? `<div class="card-footer text-warning small"><i class="bi bi-exclamation-triangle"></i> Only ${product.stock} left!</div>`
-                    : ""
-                }
+      <div class="col-md-6 col-lg-4 col-xl-3">
+        <div class="card product-card h-100">
+          <img src="${
+            product.image ||
+            "https://via.placeholder.com/300x200?text=" +
+              encodeURIComponent(product.name)
+          }"
+            class="card-img-top" alt="${product.name}"
+            style="height: 200px; object-fit: cover;">
+          <div class="card-body d-flex flex-column">
+            <span class="badge bg-secondary mb-2" style="width: fit-content;">
+              ${product.category}
+            </span>
+            <h5 class="card-title">${product.name}</h5>
+            <p class="card-text text-muted small flex-grow-1">
+              ${product.description || ""}
+            </p>
+            <div class="d-flex justify-content-between align-items-center mt-auto">
+              <span class="h5 mb-0 text-primary">$${formatMoney(product.price)}</span>
+              <button class="btn btn-primary btn-sm" onclick="addToCart(${product.id})">
+                <i class="bi bi-cart-plus"></i> Add
+              </button>
             </div>
+          </div>
+          ${
+            product.stock < 10
+              ? `<div class="card-footer text-warning small">
+                  <i class="bi bi-exclamation-triangle"></i> Only ${product.stock} left!
+                 </div>`
+              : ""
+          }
         </div>
+      </div>
     `
     )
     .join("");
@@ -276,9 +350,7 @@ function loadCategories() {
 
 function filterByCategory() {
   const category = document.getElementById("categoryFilter").value;
-  const filtered = category
-    ? products.filter((p) => p.category === category)
-    : products;
+  const filtered = category ? products.filter((p) => p.category === category) : products;
   renderProducts(filtered);
 }
 
@@ -298,7 +370,14 @@ async function searchProducts(event) {
       `${API_URL}/products/search?q=${encodeURIComponent(query)}`
     );
     const results = await response.json();
-    renderProducts(results);
+
+    // normalize search results too (in case backend returns strings)
+    const normalized = (Array.isArray(results) ? results : []).map((p) => ({
+      ...p,
+      price: toNumber(p.price, 0),
+    }));
+
+    renderProducts(normalized);
     showProducts();
   } catch (error) {
     showToast("Search failed", "error");
@@ -314,7 +393,9 @@ async function searchProducts(event) {
 function loadCart() {
   const savedCart = localStorage.getItem("cart");
   if (savedCart) {
-    cart = JSON.parse(savedCart);
+    cart = normalizeCartItems(JSON.parse(savedCart));
+    enrichCartFromProducts(); // safe even if products not loaded yet
+    saveCart();
     updateCartUI();
   }
 }
@@ -346,7 +427,8 @@ async function syncCart() {
     });
 
     if (response.ok) {
-      cart = await response.json();
+      cart = normalizeCartItems(await response.json());
+      enrichCartFromProducts(); // IMPORTANT
       saveCart();
       updateCartUI();
     }
@@ -362,17 +444,19 @@ function addToCart(productId) {
   const existingItem = cart.find((item) => item.productId === productId);
 
   if (existingItem) {
-    existingItem.quantity++;
+    existingItem.quantity = toNumber(existingItem.quantity, 0) + 1;
   } else {
     cart.push({
       productId: productId,
       name: product.name,
-      price: product.price,
+      price: toNumber(product.price, 0),
       image: product.image,
       quantity: 1,
     });
   }
 
+  cart = normalizeCartItems(cart);
+  enrichCartFromProducts();
   saveCart();
   updateCartUI();
   showToast(`${product.name} added to cart`, "success");
@@ -403,12 +487,14 @@ function updateCartQuantity(productId, delta) {
   const item = cart.find((i) => i.productId === productId);
   if (!item) return;
 
-  item.quantity += delta;
+  item.quantity = toNumber(item.quantity, 0) + delta;
 
   if (item.quantity <= 0) {
     cart = cart.filter((i) => i.productId !== productId);
   }
 
+  cart = normalizeCartItems(cart);
+  enrichCartFromProducts();
   saveCart();
   updateCartUI();
   renderCart();
@@ -416,98 +502,98 @@ function updateCartQuantity(productId, delta) {
 
 function removeFromCart(productId) {
   cart = cart.filter((i) => i.productId !== productId);
+  cart = normalizeCartItems(cart);
+  enrichCartFromProducts();
   saveCart();
   updateCartUI();
   renderCart();
 }
 
 function updateCartUI() {
-  const count = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const count = (cart || []).reduce((sum, item) => sum + toNumber(item.quantity, 0), 0);
   document.getElementById("cartCount").textContent = count;
 }
 
 function renderCart() {
   const cartItems = document.getElementById("cartItems");
 
-  if (cart.length === 0) {
+  if (!cart || cart.length === 0) {
     cartItems.innerHTML = `
-            <div class="text-center py-5">
-                <i class="bi bi-cart-x display-1 text-muted"></i>
-                <p class="text-muted mt-3">Your cart is empty</p>
-                <button class="btn btn-primary" onclick="showProducts()">Start Shopping</button>
-            </div>
-        `;
+      <div class="text-center py-5">
+        <i class="bi bi-cart-x display-1 text-muted"></i>
+        <p class="text-muted mt-3">Your cart is empty</p>
+        <button class="btn btn-primary" onclick="showProducts()">Start Shopping</button>
+      </div>
+    `;
     document.getElementById("cartSubtotal").textContent = "$0.00";
     document.getElementById("cartShipping").textContent = "$0.00";
     document.getElementById("cartTotal").textContent = "$0.00";
     return;
   }
 
+  // Always safe before rendering
+  cart = normalizeCartItems(cart);
+  enrichCartFromProducts();
+  saveCart();
+
   cartItems.innerHTML = cart
     .map(
-      (item) => `
-        <div class="card mb-3">
+      (item) => {
+        const unit = money(item.price);
+        const qty = toNumber(item.quantity, 0);
+        const lineTotal = unit * qty;
+
+        return `
+          <div class="card mb-3">
             <div class="card-body">
-                <div class="row align-items-center">
-                    <div class="col-md-2">
-                        <img src="${
-                          item.image ||
-                          "https://via.placeholder.com/100x100?text=" +
-                            encodeURIComponent(item.name)
-                        }" 
-                             class="img-fluid rounded" alt="${item.name}">
-                    </div>
-                    <div class="col-md-4">
-                        <h6 class="mb-0">${item.name}</h6>
-                        <small class="text-muted">$${item.price.toFixed(
-                          2
-                        )} each</small>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="input-group input-group-sm">
-                            <button class="btn btn-outline-secondary" onclick="updateCartQuantity(${
-                              item.productId
-                            }, -1)">-</button>
-                            <span class="input-group-text">${
-                              item.quantity
-                            }</span>
-                            <button class="btn btn-outline-secondary" onclick="updateCartQuantity(${
-                              item.productId
-                            }, 1)">+</button>
-                        </div>
-                    </div>
-                    <div class="col-md-2 text-end">
-                        <strong>$${(item.price * item.quantity).toFixed(
-                          2
-                        )}</strong>
-                    </div>
-                    <div class="col-md-1 text-end">
-                        <button class="btn btn-sm btn-outline-danger" onclick="removeFromCart(${
-                          item.productId
-                        })">
-                            <i class="bi bi-trash"></i>
-                        </button>
-                    </div>
+              <div class="row align-items-center">
+                <div class="col-md-2">
+                  <img src="${
+                    item.image ||
+                    "https://via.placeholder.com/100x100?text=" +
+                      encodeURIComponent(item.name || "Item")
+                  }"
+                    class="img-fluid rounded" alt="${item.name || "Item"}">
                 </div>
+                <div class="col-md-4">
+                  <h6 class="mb-0">${item.name || "Unknown product"}</h6>
+                  <small class="text-muted">$${formatMoney(unit)} each</small>
+                </div>
+                <div class="col-md-3">
+                  <div class="input-group input-group-sm">
+                    <button class="btn btn-outline-secondary" onclick="updateCartQuantity(${item.productId}, -1)">-</button>
+                    <span class="input-group-text">${qty}</span>
+                    <button class="btn btn-outline-secondary" onclick="updateCartQuantity(${item.productId}, 1)">+</button>
+                  </div>
+                </div>
+                <div class="col-md-2 text-end">
+                  <strong>$${formatMoney(lineTotal)}</strong>
+                </div>
+                <div class="col-md-1 text-end">
+                  <button class="btn btn-sm btn-outline-danger" onclick="removeFromCart(${item.productId})">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </div>
+              </div>
             </div>
-        </div>
-    `
+          </div>
+        `;
+      }
     )
     .join("");
 
   const subtotal = cart.reduce(
-    (sum, item) => sum + item.price * item.quantity,
+    (sum, item) => sum + money(item.price) * toNumber(item.quantity, 0),
     0
   );
+
   const shipping = subtotal > 50 ? 0 : 9.99;
   const total = subtotal + shipping;
 
-  document.getElementById("cartSubtotal").textContent = `$${subtotal.toFixed(
-    2
-  )}`;
+  document.getElementById("cartSubtotal").textContent = `$${formatMoney(subtotal)}`;
   document.getElementById("cartShipping").textContent =
-    shipping === 0 ? "FREE" : `$${shipping.toFixed(2)}`;
-  document.getElementById("cartTotal").textContent = `$${total.toFixed(2)}`;
+    shipping === 0 ? "FREE" : `$${formatMoney(shipping)}`;
+  document.getElementById("cartTotal").textContent = `$${formatMoney(total)}`;
 }
 
 // ============================================
@@ -566,12 +652,12 @@ async function checkout() {
 async function loadOrders() {
   if (!currentUser) {
     document.getElementById("ordersList").innerHTML = `
-            <div class="text-center py-5">
-                <i class="bi bi-box-seam display-1 text-muted"></i>
-                <p class="text-muted mt-3">Please login to view your orders</p>
-                <button class="btn btn-primary" onclick="showLoginModal()">Login</button>
-            </div>
-        `;
+      <div class="text-center py-5">
+        <i class="bi bi-box-seam display-1 text-muted"></i>
+        <p class="text-muted mt-3">Please login to view your orders</p>
+        <button class="btn btn-primary" onclick="showLoginModal()">Login</button>
+      </div>
+    `;
     return;
   }
 
@@ -596,14 +682,14 @@ async function loadOrders() {
 function renderOrders(orders) {
   const ordersList = document.getElementById("ordersList");
 
-  if (orders.length === 0) {
+  if (!orders || orders.length === 0) {
     ordersList.innerHTML = `
-            <div class="text-center py-5">
-                <i class="bi bi-box-seam display-1 text-muted"></i>
-                <p class="text-muted mt-3">You haven't placed any orders yet</p>
-                <button class="btn btn-primary" onclick="showProducts()">Start Shopping</button>
-            </div>
-        `;
+      <div class="text-center py-5">
+        <i class="bi bi-box-seam display-1 text-muted"></i>
+        <p class="text-muted mt-3">You haven't placed any orders yet</p>
+        <button class="btn btn-primary" onclick="showProducts()">Start Shopping</button>
+      </div>
+    `;
     return;
   }
 
@@ -618,51 +704,45 @@ function renderOrders(orders) {
   ordersList.innerHTML = orders
     .map(
       (order) => `
-        <div class="card mb-3">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <div>
-                    <strong>Order #${order.id}</strong>
-                    <small class="text-muted ms-3">${new Date(
-                      order.createdAt
-                    ).toLocaleDateString()}</small>
-                </div>
-                <span class="badge bg-${
-                  statusColors[order.status] || "secondary"
-                }">${order.status.toUpperCase()}</span>
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    ${order.items
-                      .map(
-                        (item) => `
-                        <div class="col-md-6 mb-2">
-                            <div class="d-flex align-items-center">
-                                <img src="${
-                                  item.image || "https://via.placeholder.com/50"
-                                }" 
-                                     class="rounded me-2" width="50" height="50" style="object-fit: cover;">
-                                <div>
-                                    <div>${item.name}</div>
-                                    <small class="text-muted">Qty: ${
-                                      item.quantity
-                                    } × $${item.price.toFixed(2)}</small>
-                                </div>
-                            </div>
-                        </div>
-                    `
-                      )
-                      .join("")}
-                </div>
-            </div>
-            <div class="card-footer d-flex justify-content-between">
-                <span>Total: <strong>$${order.total.toFixed(2)}</strong></span>
-                ${
-                  order.status === "pending"
-                    ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelOrder(${order.id})">Cancel Order</button>`
-                    : ""
-                }
-            </div>
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <div>
+            <strong>Order #${order.id}</strong>
+            <small class="text-muted ms-3">${new Date(order.createdAt).toLocaleDateString()}</small>
+          </div>
+          <span class="badge bg-${statusColors[order.status] || "secondary"}">
+            ${(order.status || "").toUpperCase()}
+          </span>
         </div>
+        <div class="card-body">
+          <div class="row">
+            ${(order.items || [])
+              .map(
+                (item) => `
+                <div class="col-md-6 mb-2">
+                  <div class="d-flex align-items-center">
+                    <img src="${item.image || "https://via.placeholder.com/50"}"
+                      class="rounded me-2" width="50" height="50" style="object-fit: cover;">
+                    <div>
+                      <div>${item.name || "Item"}</div>
+                      <small class="text-muted">Qty: ${toNumber(item.quantity, 0)} × $${formatMoney(item.price)}</small>
+                    </div>
+                  </div>
+                </div>
+              `
+              )
+              .join("")}
+          </div>
+        </div>
+        <div class="card-footer d-flex justify-content-between">
+          <span>Total: <strong>$${formatMoney(order.total)}</strong></span>
+          ${
+            order.status === "pending"
+              ? `<button class="btn btn-sm btn-outline-danger" onclick="cancelOrder(${order.id})">Cancel Order</button>`
+              : ""
+          }
+        </div>
+      </div>
     `
     )
     .join("");
@@ -760,9 +840,7 @@ async function checkSystemStatus() {
 
 function setStatusIndicator(id, isOnline) {
   const indicator = document.getElementById(id);
-  indicator.className = `status-indicator ${
-    isOnline ? "status-online" : "status-offline"
-  }`;
+  indicator.className = `status-indicator ${isOnline ? "status-online" : "status-offline"}`;
 }
 
 // ============================================
@@ -837,14 +915,14 @@ function showToast(message, type = "info") {
     }[type] || "bi-info-circle";
 
   container.innerHTML += `
-        <div id="${id}" class="toast ${bgColor} text-white" role="alert">
-            <div class="toast-body d-flex align-items-center">
-                <i class="bi ${icon} me-2"></i>
-                ${message}
-                <button type="button" class="btn-close btn-close-white ms-auto" data-bs-dismiss="toast"></button>
-            </div>
-        </div>
-    `;
+    <div id="${id}" class="toast ${bgColor} text-white" role="alert">
+      <div class="toast-body d-flex align-items-center">
+        <i class="bi ${icon} me-2"></i>
+        ${message}
+        <button type="button" class="btn-close btn-close-white ms-auto" data-bs-dismiss="toast"></button>
+      </div>
+    </div>
+  `;
 
   const toastEl = document.getElementById(id);
   const toast = new bootstrap.Toast(toastEl, { delay: 3000 });
