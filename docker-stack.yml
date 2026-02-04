@@ -69,7 +69,7 @@ services:
 
   # Application Layer
   frontend:
-    image: frontend:1.0.2
+    image: frontend:1.0.4
 
     networks:
       - traefik-public

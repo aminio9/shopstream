@@ -143,20 +143,70 @@ function logout() {
 // ============================================
 // Products
 // ============================================
-
 async function loadProducts() {
   showLoading();
-
   try {
+    
     const response = await fetch(`${API_URL}/products`);
-    products = await response.json();
+    console.log("Response status:", response.status);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const apiProducts = await response.json();
+    // console.log("Raw API response:", apiProducts);
+    // console.log("Product count:", apiProducts.length);
+    
+    if (!Array.isArray(apiProducts)) {
+      throw new Error("API response is not an array");
+    }
+    
+    // Normalize data
+    products = apiProducts
+      .filter(p => p.is_active)
+      .map(p => {
+        // console.log("Processing product:", p.id, p.name);
+        
+        const priceNum = parseFloat(p.price);
+        if (isNaN(priceNum)) {
+          console.warn(`Invalid price for product ${p.id}:`, p.price);
+        }
+        
+        return {
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          price: priceNum,
+          stock: p.stock,
+          category: getCategoryName(p.category_id),
+          image: p.image_url,
+        };
+      });
+
+    // console.log("Normalized products:", products);
+    
     renderProducts(products);
     loadCategories();
+    
   } catch (error) {
-    showToast("Failed to load products", "error");
+    console.error("Product load error:", error); 
+    console.error("Error stack:", error.stack);
+    showToast("Failed to load products: " + error.message, "error");
+  } finally {
+    hideLoading();
   }
+}
 
-  hideLoading();
+function getCategoryName(categoryId) {
+  const categoryMap = {
+    1: "Electronics",
+    2: "Apparel",
+    3: "Books",
+    4: "Home",
+    5: "Sports",
+  };
+  return categoryMap[categoryId] || "Uncategorized";
 }
 
 function renderProducts(productsToRender) {
