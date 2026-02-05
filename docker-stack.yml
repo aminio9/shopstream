@@ -62,8 +62,6 @@ services:
         - traefik.http.routers.traefik.rule=Host(`traefik.example.com`)
         - traefik.http.routers.traefik.entrypoints=web
         - traefik.http.routers.traefik.service=api@internal
-        # API dashboard is internal; no loadbalancer port label needed
-
 
   # Application Layer
   frontend:
@@ -208,7 +206,6 @@ services:
       PORT: "5000"
       TOKEN_EXPIRY_HOURS: "24"
 
-      # IMPORTANT: Swarm DNS is the SERVICE NAME (stack-prefixed)
       DB_HOST: "shopstream_mariadb"
       DB_PORT: "3306"
       DB_NAME: "shopstream"
